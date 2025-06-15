@@ -1,0 +1,10 @@
+fastapi
+uvicorn
+python-dotenv
+pandas
+openpyxl
+cryptography
+python-jose
+python-multipart
+ratelimit
+pyjwt

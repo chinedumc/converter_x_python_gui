@@ -1,0 +1,26 @@
+{
+	"dependencies": {
+		"@heroicons/react": "^2.2.0",
+		"@tailwindcss/postcss": "^4.1.8",
+		"autoprefixer": "^10.4.21",
+		"axios": "^1.9.0",
+		"next": "^15.3.3",
+		"postcss": "^8.5.4",
+		"react": "^19.1.0",
+		"react-dom": "^19.1.0",
+		"react-dropzone": "^14.3.8",
+		"tailwindcss": "^4.1.8"
+	},
+	"devDependencies": {
+		"@types/node": "22.15.30",
+		"@types/react": "^19.1.6",
+		"@types/react-dom": "^19.1.6",
+		"@types/react-dropzone": "^4.2.2",
+		"typescript": "5.8.3"
+	},
+	"scripts": {
+		"dev": "next dev",
+		"build": "next build",
+		"start": "next start"
+	}
+}
