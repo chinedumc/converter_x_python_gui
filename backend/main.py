@@ -2,6 +2,7 @@ from fastapi import FastAPI, HTTPException, Depends, Request, UploadFile, File, 
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordBearer
 from fastapi.responses import JSONResponse, FileResponse
+from fastapi import APIRouter
 from datetime import datetime, timedelta
 from typing import Optional
 import uvicorn
@@ -27,6 +28,9 @@ app = FastAPI(
     description="A secure API for converting Excel files to XML format",
     version="1.0.0"
 )
+
+# Create an APIRouter with the /api/v1 prefix
+api_router = APIRouter(prefix="/api/v1")
 
 # Security configurations
 SECRET_KEY = os.getenv("SECRET_KEY", "your-secret-key-here")
@@ -125,27 +129,30 @@ async def session_middleware(request: Request, call_next):
     return response
 
 # Health check endpoint
-@app.get("/health")
+@api_router.get("/health")
 async def health_check():
     return {"status": "healthy", "timestamp": datetime.utcnow()}
 
 # File conversion endpoint
-@app.post("/convert")
+@api_router.post("/convert")
 async def convert_excel_to_xml(
     file: UploadFile = File(...),
     header_fields: str = Form(None)
 ):
     try:
-        log.info(f"File upload attempt: {file.filename}")
-        header_fields_dict = json.loads(header_fields) if header_fields else {}
+        log.info(f"File upload attempt: {file.filename}")  # <-- Keep this log
+        log.info(f"Raw header_fields received: {header_fields}")  # <-- Add this log
 
-        # If header_fields_dict is a list, convert to dict
+        header_fields_dict = {}
+        if header_fields:
+            header_fields_dict = json.loads(header_fields)
         if isinstance(header_fields_dict, list):
             header_fields_dict = {
                 item["tagName"]: item["tagValue"]
                 for item in header_fields_dict
                 if "tagName" in item and "tagValue" in item
             }
+        log.info(f"Parsed header_fields_dict: {header_fields_dict}")
 
         # Save uploaded file temporarily
         temp_path = os.path.join(Config.UPLOAD_DIR, file.filename)
@@ -164,7 +171,8 @@ async def convert_excel_to_xml(
         # Add header fields
         header = ET.SubElement(root, "HEADER")
         for k, v in header_fields_dict.items():
-            ET.SubElement(header, k).text = str(v)
+            tag = sanitize_tag(k)
+            ET.SubElement(header, tag).text = str(v)
         # Add data rows
         body_section = ET.SubElement(root, "BODY")
         for _, row in df.iterrows():
@@ -177,6 +185,9 @@ async def convert_excel_to_xml(
         rough_string = ET.tostring(root, encoding="utf-8", method="xml")
         reparsed = minidom.parseString(rough_string)
         xml_content = reparsed.toprettyxml(indent="  ", encoding="utf-8")
+        # Remove possible blank lines at the start
+        if xml_content.startswith(b'\n'):
+            xml_content = xml_content.lstrip(b'\n')
 
         # Generate a unique filename using date-time-second
         timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
@@ -189,7 +200,7 @@ async def convert_excel_to_xml(
         log.info(f"File conversion successful: {file.filename} -> {saved_filename}")
 
         backend_url = os.getenv("BACKEND_URL", "http://localhost:8000")
-        download_url = f"{backend_url}/download/{saved_filename}"
+        download_url = f"/api/v1/download/{saved_filename}"
         log.info(f"Download URL generated: {download_url}")
         return {
             "status": "success",
@@ -201,7 +212,7 @@ async def convert_excel_to_xml(
         log.error(f"Conversion failed for file: {file.filename} - {str(e)}\n{traceback.format_exc()}")
         raise HTTPException(status_code=500, detail="An error occurred during the conversion process. Please try again later.")
 
-@app.get("/download/{filename}")
+@api_router.get("/download/{filename}")
 async def download_file(filename: str):
     output_dir = Config.OUTPUT_DIR
     file_path = os.path.join(output_dir, filename)
@@ -211,6 +222,9 @@ async def download_file(filename: str):
         raise HTTPException(status_code=404, detail="File not found")
     log.info(f"File download successful: {filename}")
     return FileResponse(file_path, filename=filename)
+
+# Register the router with the app
+app.include_router(api_router)
 
 @app.get("/")
 def read_root():

@@ -8,6 +8,9 @@ from ..config import config
 from ..utils.audit import audit_logger
 from ..utils.encryption import encryption
 import time
+import logging
+
+log = logging.getLogger(__name__)
 
 class ExcelToXMLConverter:
     def __init__(self):
@@ -15,32 +18,61 @@ class ExcelToXMLConverter:
         self.schema_version = config.XML_SCHEMA_VERSION
 
     def _sanitize_xml_tag(self, tag: str) -> str:
-        """Sanitize XML tag name to ensure it's valid."""
-        # Replace spaces and special characters with underscore
-        tag = ''.join(c if c.isalnum() or c == '_' else '_' for c in tag)
+        """Validate XML tag name."""
+        if not tag:
+            raise ValueError("Empty tag name is not allowed")
+            
+        # Convert to string and trim
+        tag = str(tag).strip()
+        
+        # Check for special characters
+        special_chars = set(tag) - set('abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_')
+        if special_chars:
+            raise ValueError(f"Invalid characters in tag name: {tag}. Special characters {special_chars} are not allowed")
+            
+        # Replace spaces with underscores
+        tag = tag.replace(' ', '_')
+        
         # Ensure tag starts with letter or underscore
-        if tag and not (tag[0].isalpha() or tag[0] == '_'):
+        if not (tag[0].isalpha() or tag[0] == '_'):
             tag = '_' + tag
-        # Remove consecutive underscores
+            
+        # Remove consecutive underscores and trailing underscores
         while '__' in tag:
             tag = tag.replace('__', '_')
+        tag = tag.strip('_')
+        
+        # Ensure tag is not empty after sanitization
+        if not tag:
+            raise ValueError("Tag name cannot be empty after sanitization")
+            
         return tag
 
     def _create_header(self, root: ET.Element, header_fields: Dict[str, str]) -> None:
         """Create XML header section with provided fields."""
-        header = ET.SubElement(root, "Header")
-        for key, value in header_fields.items():
-            # Sanitize and validate tag name
-            sanitized_key = self._sanitize_xml_tag(key)
-            if not sanitized_key:
-                raise ValueError(f"Invalid header field name: {key}")
-            field = ET.SubElement(header, sanitized_key)
-            field.text = str(value)
+        if not header_fields:
+            return  # Skip header creation if no fields provided
 
-        # Add metadata
-        metadata = ET.SubElement(header, "Metadata")
-        ET.SubElement(metadata, "GeneratedAt").text = datetime.utcnow().isoformat()
-        ET.SubElement(metadata, "SchemaVersion").text = self.schema_version
+        # Create HEADER element
+        header = ET.SubElement(root, "HEADER")
+        
+        # Add each header field
+        for key, value in header_fields.items():
+            try:
+                # Create field element with exact name from user input
+                # Replace spaces with underscores to maintain valid XML
+                tag_name = key.replace(' ', '_')
+                field = ET.SubElement(header, tag_name)
+                
+                # Set value without sanitization
+                if value is not None:
+                    field.text = str(value)
+                else:
+                    field.text = ""
+                    
+            except Exception as e:
+                log.error(f"Error processing header field {key}: {str(e)}")
+                raise ValueError(f"Error processing header field: {str(e)}")
 
     def _process_excel_data(self, df: pd.DataFrame) -> List[Dict[str, Any]]:
         """Process Excel data and handle various data types."""
@@ -74,20 +106,20 @@ class ExcelToXMLConverter:
                 field = ET.SubElement(row, sanitized_name)
                 field.text = value
 
-    def _prettify_xml(self, elem: ET.Element) -> str:
-        """Convert XML element to a pretty-printed string."""
-        rough_string = ET.tostring(elem, 'utf-8')
-        reparsed = minidom.parseString(rough_string)
-        return reparsed.toprettyxml(indent="  ")
+    def _prettify_xml(self, xml_content: str) -> str:
+        """Prettify XML content."""
+        parsed = minidom.parseString(xml_content)
+        return parsed.toprettyxml(indent='  ')
 
     def convert(self,
         input_file: Path,
         output_file: Path,
         header_fields: Optional[Dict[str, str]] = None,
         sheet_name: Optional[str] = None,
+        encrypt_output: bool = True,
         user_id: str = "system"
     ) -> None:
-        """Convert Excel file to XML with optional header fields."""
+        """Convert Excel file to XML with optional header fields and encryption."""
         start_time = time.time()
 
         try:
@@ -104,16 +136,20 @@ class ExcelToXMLConverter:
             if df.empty:
                 raise ValueError("Excel file is empty")
 
-            # Create root element with namespace
-            root = ET.Element("ExcelConverter", {"xmlns": self.namespace})
-
-            # Add header section if provided
+            # Create root element
+            root = ET.Element("CALLREPORT")
+            
+            # Add header fields if provided
             if header_fields:
                 try:
+                    log.info(f"Processing header fields: {header_fields}")
                     self._create_header(root, header_fields)
                 except ValueError as e:
                     raise ValueError(f"Invalid header fields: {str(e)}")
 
+            # Create BODY element
+            body = ET.SubElement(root, "BODY")
+            
             # Process Excel data
             try:
                 records = self._process_excel_data(df)
@@ -124,15 +160,19 @@ class ExcelToXMLConverter:
             self._create_data_section(root, records)
 
             # Convert to pretty-printed XML
-            xml_content = self._prettify_xml(root)
+            xml_content = self._prettify_xml(ET.tostring(root, encoding='unicode'))
 
             # Write to file
             with open(output_file, 'w', encoding='utf-8') as f:
                 f.write(xml_content)
 
-            # Encrypt the output file
-            encrypted_output = output_file.with_suffix('.xml.enc')
-            encryption.encrypt_file(output_file, encrypted_output)
+            # Encrypt the output file if requested
+            if encrypt_output:
+                encrypted_output = output_file.with_suffix('.xml.enc')
+                encryption.encrypt_file(output_file, encrypted_output)
+                final_output = encrypted_output
+            else:
+                final_output = output_file
 
             # Calculate conversion time
             conversion_time = (time.time() - start_time) * 1000  # Convert to milliseconds
@@ -141,17 +181,19 @@ class ExcelToXMLConverter:
             audit_logger.log_conversion_event(
                 user_id=user_id,
                 input_file=str(input_file),
-                output_file=str(encrypted_output),
+                output_file=str(final_output),
                 conversion_time=conversion_time,
                 details={
                     "rows_processed": len(records),
                     "columns": list(df.columns),
-                    "sheet_name": sheet_name or "default"
+                    "sheet_name": sheet_name or "default",
+                    "encrypted": encrypt_output
                 }
             )
 
-            # Remove unencrypted output file
-            output_file.unlink()
+            # Remove unencrypted file if encryption was applied
+            if encrypt_output:
+                output_file.unlink()
 
         except Exception as e:
             # Log conversion error
@@ -162,7 +204,8 @@ class ExcelToXMLConverter:
                 details={
                     "input_file": str(input_file),
                     "output_file": str(output_file),
-                    "sheet_name": sheet_name
+                    "sheet_name": sheet_name,
+                    "encrypted": encrypt_output
                 }
             )
             raise
@@ -172,10 +215,67 @@ class ExcelToXMLConverter:
         try:
             # Check file extension
             if not config.validate_file_extension(file_path.name):
+                log.error(f"Invalid file extension: {file_path.suffix}")
                 return False
 
             # Try to read the file
-            pd.read_excel(file_path)
+            df = pd.read_excel(file_path)
+
+            # Check if file is empty
+            if df.empty:
+                log.error("Excel file is empty")
+                return False
+
+            # Check for required columns based on CALLREPORT structure
+            required_columns = ['SN', 'BRANCH_CODE', 'DEAL_NO', 'UNIQUE_ID', 'CIF_NO1', 'NUBAN', 
+                              'NAME', 'DEAL_AMOUNT', 'PRINCIPAL_OUTSTANDING', 'PAST_DUE_BALANCE', 
+                              'TOTAL_EXPOSURE', 'PAST_DUE_DAYS', 'VALUE_DATE', 'MATURITY_DATE', 
+                              'BVN', 'CRMS_CODE']
+            missing_columns = [col for col in required_columns if col not in df.columns]
+            if missing_columns:
+                log.error(f"Missing required columns: {missing_columns}")
+                return False
+
+            # Validate data types and formats
+            data_type_rules = {
+                'SN': {'type': 'int'},
+                'BRANCH_CODE': {'type': 'int'},
+                'DEAL_NO': {'type': 'int'},
+                'UNIQUE_ID': {'type': 'str'},
+                'CIF_NO1': {'type': 'int'},
+                'NUBAN': {'type': 'float'},
+                'NAME': {'type': 'str'},
+                'DEAL_AMOUNT': {'type': 'float'},
+                'PRINCIPAL_OUTSTANDING': {'type': 'float'},
+                'PAST_DUE_BALANCE': {'type': 'float'},
+                'TOTAL_EXPOSURE': {'type': 'float'},
+                'PAST_DUE_DAYS': {'type': 'int'},
+                'VALUE_DATE': {'type': 'datetime'},
+                'MATURITY_DATE': {'type': 'datetime'},
+                'BVN': {'type': 'str'},
+                'CRMS_CODE': {'type': 'str'}
+            }
+
+            for column, rules in data_type_rules.items():
+                try:
+                    # Convert column to expected type
+                    if rules['type'] == 'int':
+                        df[column] = pd.to_numeric(df[column], downcast='integer')
+                    elif rules['type'] == 'float':
+                        df[column] = pd.to_numeric(df[column], downcast='float')
+                    elif rules['type'] == 'datetime':
+                        df[column] = pd.to_datetime(df[column])
+                    elif rules['type'] == 'str':
+                        df[column] = df[column].astype(str)
+                except Exception as e:
+                    log.error(f"Data type validation failed for column {column}: {str(e)}")
+                    return False
+
+                # Check for empty values
+                if df[column].isnull().any():
+                    log.error(f"Column {column} contains empty values")
+                    return False
+
             return True
 
         except Exception as e:
@@ -185,6 +285,7 @@ class ExcelToXMLConverter:
                 error=e,
                 details={"file": str(file_path)}
             )
+            log.error(f"Excel validation failed: {str(e)}")
             return False
 
 # Create singleton instance

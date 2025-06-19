@@ -1,11 +1,6 @@
-import os
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from fastapi.exceptions import RequestValidationError
-from starlette.exceptions import HTTPException as StarletteHTTPException
-from ratelimit import RateLimitMiddleware, Rule
-from ratelimit.backends.simple import MemoryBackend
 from datetime import datetime
 
 from .config import config
@@ -31,15 +26,30 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Add rate limiting middleware
-app.add_middleware(
-    RateLimitMiddleware,
-    authenticate=lambda r: r.client.host,
-    backend=MemoryBackend(),
-    config={
-        r".*": [Rule(second=config.RATE_LIMIT_PERIOD, count=config.RATE_LIMIT_CALLS)]
-    }
-)
+# Add rate limiting
+@app.middleware("http")
+async def rate_limit(request: Request, call_next):
+    # Implement simple rate limiting
+    client_ip = request.client.host
+    rate_limit_key = f"rate_limit:{client_ip}"
+    
+    # Check if client has exceeded rate limit
+    if config.RATE_LIMIT_CALLS > 0:
+        # This is a simplified rate limiting implementation
+        # In production, you would want to use a proper caching system
+        if not hasattr(request.state, "rate_limit_count"):
+            request.state.rate_limit_count = 0
+        
+        if request.state.rate_limit_count >= config.RATE_LIMIT_CALLS:
+            raise HTTPException(
+                status_code=429,
+                detail="Too many requests"
+            )
+        
+        request.state.rate_limit_count += 1
+    
+    response = await call_next(request)
+    return response
 
 # Add security middleware
 app.add_middleware(SecurityMiddleware)

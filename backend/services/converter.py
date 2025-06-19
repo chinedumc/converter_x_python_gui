@@ -94,8 +94,8 @@ class ExcelToXMLConverter:
             root = ET.Element("ROOT")
             
             # Add header
-            header = self.create_xml_header(header_fields)
-            root.append(header)
+            converter = ExcelToXMLConverter()
+            converter._create_header(root, header_fields)
             
             # Read Excel data
             df = pd.read_excel(excel_path)

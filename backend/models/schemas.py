@@ -8,22 +8,12 @@ class HeaderField(BaseModel):
     name: str = Field(..., description="Header field name")
     value: str = Field(..., description="Header field value")
 
-    @validator('name')
-    def validate_name(cls, v):
-        if not v.replace('_', '').isalnum():
-            raise ValueError('Header field name must contain only alphanumeric characters and underscores')
-        return v
 
 class ConversionRequest(BaseModel):
-    header_fields: Optional[Dict[str, str]] = Field(
-        default=None,
-        description="Optional header fields to include in XML"
-    )
-    sheet_name: Optional[str] = Field(
-        default=None,
-        description="Name of the Excel sheet to convert"
-    )
-
+    """Request model for conversion."""
+    header_fields: Optional[List[HeaderField]] = None
+    sheet_name: Optional[str] = None
+    encrypt_output: bool = True
     @validator('header_fields')
     def validate_header_fields(cls, v):
         if v is not None:

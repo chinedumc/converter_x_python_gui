@@ -1,7 +1,16 @@
 "use client";
 
 import React, { useState, useCallback, useEffect, useId } from "react";
-import * as XLSX from "xlsx";
+
+// Escapes special XML characters in a string
+function escapeXml(unsafe: string): string {
+	return unsafe
+		.replace(/&/g, "&amp;")
+		.replace(/</g, "&lt;")
+		.replace(/>/g, "&gt;")
+		.replace(/"/g, "&quot;")
+		.replace(/'/g, "&apos;");
+}
 import {
 	Card,
 	CardContent,
@@ -17,12 +26,12 @@ import { Progress } from "@/components/ui/progress";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Separator } from "@/components/ui/separator";
 import { useToast } from "@/hooks/use-toast";
+import { convertFile } from "@/lib/api";
 import {
 	PlusCircle,
 	Trash2,
 	UploadCloud,
 	FileCog,
-	Download,
 	AlertCircle,
 	CheckCircle,
 	Info,
@@ -33,41 +42,6 @@ interface HeaderField {
 	id: string;
 	tagName: string;
 	tagValue: string;
-}
-
-const escapeXml = (unsafe: string): string => {
-	return unsafe.replace(/[<>&'"]/g, (c) => {
-		switch (c) {
-			case "<":
-				return "&lt;";
-			case ">":
-				return "&gt;";
-			case "&":
-				return "&amp;";
-			case "'":
-				return "&apos;";
-			case '"':
-				return "&quot;";
-			default:
-				return c;
-		}
-	});
-};
-
-function sanitizeXmlTagName(name: string): string {
-	// Replace spaces with underscores
-	let tag = name.replace(/\s+/g, "_");
-	// Remove invalid characters (allow only letters, digits, underscore, hyphen, period)
-	tag = tag.replace(/[^a-zA-Z0-9_.-]/g, "");
-	// Ensure tag starts with a letter or underscore
-	if (!/^[a-zA-Z_]/.test(tag)) {
-		tag = "_" + tag;
-	}
-	// If tag is empty after sanitization, use a fallback
-	if (!tag) {
-		tag = "EMPTY_TAG";
-	}
-	return tag;
 }
 
 export function ExcelToXmlConverter() {
@@ -87,7 +61,7 @@ export function ExcelToXmlConverter() {
 	const [conversionStatus, setConversionStatus] = useState<
 		"idle" | "validating" | "converting" | "completed" | "error"
 	>("idle");
-	const [xmlOutput, setXmlOutput] = useState<string | null>(null);
+
 	const [statusMessage, setStatusMessage] = useState<string | null>(null);
 	const { toast } = useToast();
 	const formId = useId();
@@ -102,8 +76,9 @@ export function ExcelToXmlConverter() {
 		setOriginalFileName("");
 		setConversionProgress(0);
 		setConversionStatus("idle");
-		setXmlOutput(null);
 		setStatusMessage(null);
+
+		// Reset file input
 		const fileInput = document.getElementById(
 			`${formId}-file-upload`
 		) as HTMLInputElement;
@@ -141,8 +116,7 @@ export function ExcelToXmlConverter() {
 
 	const handleAddNewHeaderField = () => {
 		const tagNameError = validateTagName(currentTagName);
-		// Tag value validation allows empty, so no error check here unless specific rules are added
-		// const tagValueError = validateTagValue(currentTagValue);
+		const tagValueError = validateTagValue(currentTagValue);
 
 		if (tagNameError) {
 			setCurrentTagNameError(tagNameError);
@@ -153,21 +127,42 @@ export function ExcelToXmlConverter() {
 			});
 			return;
 		}
-		// Ensure currentTagNameError is cleared if it passes here (e.g. user corrected it)
+
+		// Check for duplicate tag names
+		const isDuplicate = headerFields.some(
+			(field) => field.tagName === currentTagName.trim()
+		);
+		if (isDuplicate) {
+			const error = "Tag name already exists. Please use a unique name.";
+			setCurrentTagNameError(error);
+			toast({
+				title: "Validation Error",
+				description: error,
+				variant: "destructive",
+			});
+			return;
+		}
+
 		setCurrentTagNameError(undefined);
-		// setCurrentTagValueError(tagValueError); // if tagValue had validation
+		setCurrentTagValueError(undefined);
 
 		setHeaderFields([
 			...headerFields,
 			{
 				id: Date.now().toString(),
-				tagName: currentTagName.trim(), // Trim whitespace
-				tagValue: currentTagValue, // Keep as is, might be intentionally spaced
+				tagName: currentTagName.trim(),
+				tagValue: currentTagValue.trim(),
 			},
 		]);
+
+		// Reset input fields
 		setCurrentTagName("");
 		setCurrentTagValue("");
-		// Errors are already cleared or set by change handlers or above checks
+
+		toast({
+			title: "Success",
+			description: "Header field added successfully.",
+		});
 	};
 
 	const handleRemoveHeaderField = (idToRemove: string) => {
@@ -179,25 +174,39 @@ export function ExcelToXmlConverter() {
 
 	const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
 		const file = event.target.files?.[0];
-		if (file) {
-			if (
-				file.type ===
-					"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" ||
-				file.type === "application/vnd.ms-excel"
-			) {
-				setExcelFile(file);
-				setOriginalFileName(file.name);
-				setStatusMessage(null);
-			} else {
-				setExcelFile(null);
-				setOriginalFileName("");
-				event.target.value = "";
-				toast({
-					title: "Invalid File Type",
-					description: "Please upload a valid Excel file (.xlsx, .xls).",
-					variant: "destructive",
-				});
-			}
+		if (!file) {
+			setExcelFile(null);
+			setOriginalFileName("");
+			return;
+		}
+
+		const validTypes = [
+			"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+			"application/vnd.ms-excel",
+			".xlsx",
+			".xls",
+		];
+
+		const isValidType = validTypes.some(
+			(type) => file.type === type || file.name.toLowerCase().endsWith(type)
+		);
+
+		if (isValidType) {
+			setExcelFile(file);
+			setOriginalFileName(file.name);
+			setStatusMessage(null);
+			setConversionStatus("idle");
+		} else {
+			setExcelFile(null);
+			setOriginalFileName("");
+			setStatusMessage("Invalid file type. Please upload a valid Excel file.");
+			setConversionStatus("error");
+			event.target.value = "";
+			toast({
+				title: "Invalid File Type",
+				description: "Please upload a valid Excel file (.xlsx, .xls).",
+				variant: "destructive",
+			});
 		}
 	};
 
@@ -210,77 +219,50 @@ export function ExcelToXmlConverter() {
 			});
 			return false;
 		}
-		// Optionally, require at least one header field
-		// if (headerFields.length === 0) {
-		//   toast({
-		//     title: "Missing Headers",
-		//     description: "Please define at least one XML header field for the conversion.",
-		//     variant: "destructive",
-		//   });
-		//   return false;
-		// }
-		return true;
-	};
 
-	const generateXmlContent = async (): Promise<string> => {
-		let dataRowsXml = "";
-		if (excelFile) {
-			const arrayBuffer = await excelFile.arrayBuffer();
-			const workbook = XLSX.read(arrayBuffer, { type: "array" });
-			const sheetName = workbook.SheetNames[0];
-			const worksheet = workbook.Sheets[sheetName];
-			const jsonData: any[] = XLSX.utils.sheet_to_json(worksheet, {
-				header: 1,
+		// Validate that at least one header field is added
+		if (headerFields.length === 0) {
+			toast({
+				title: "Validation Error",
+				description: "Please add at least one header field before conversion.",
+				variant: "destructive",
 			});
-
-			// Get headers from the first row
-			const headers: string[] = jsonData[0] || [];
-
-			// Loop through data rows (skip header row)
-			for (let i = 1; i < jsonData.length; i++) {
-				const row = jsonData[i];
-				dataRowsXml += "    <ROW>\n";
-				headers.forEach((header, idx) => {
-					// Replace spaces with underscores in tag names
-					const tag = escapeXml(String(header || `COLUMN${idx + 1}`)).replace(
-						/ /g,
-						"_"
-					);
-					const value = escapeXml(String(row[idx] ?? ""));
-					dataRowsXml += `      <${tag}>${value}</${tag}>\n`;
-				});
-				dataRowsXml += "    </ROW>\n";
-			}
+			return false;
 		}
 
-		const headerItemsXml = headerFields
-			.filter(
-				(field) => field.tagName.trim() && !validateTagName(field.tagName)
-			)
-			.map(
-				(field) =>
-					`    <${field.tagName}>${escapeXml(field.tagValue)}</${
-						field.tagName
-					}>`
-			)
-			.join("\n");
+		// Validate any incomplete header fields
+		if (currentTagName || currentTagValue) {
+			toast({
+				title: "Incomplete Header Field",
+				description:
+					"Please add or clear the current header field before converting.",
+				variant: "destructive",
+			});
+			return false;
+		}
 
-		const headerXmlBlock =
-			headerFields.length > 0
-				? `  <HEADER>\n${headerItemsXml}\n  </HEADER>`
-				: `  <HEADER></HEADER>`;
+		// Validate header field names are unique
+		const tagNames = headerFields.map((field) => field.tagName);
+		const duplicates = tagNames.filter(
+			(name, index) => tagNames.indexOf(name) !== index
+		);
+		if (duplicates.length > 0) {
+			toast({
+				title: "Duplicate Header Fields",
+				description: `Found duplicate tag names: ${duplicates.join(
+					", "
+				)}. Please ensure all tag names are unique.`,
+				variant: "destructive",
+			});
+			return false;
+		}
 
-		return `<?xml version="1.0" encoding="UTF-8"?>\n<ROOT>
-${headerXmlBlock}
-  <DATA>
-${dataRowsXml}  </DATA>
-</ROOT>`;
+		return true;
 	};
 
 	const handleConvert = async () => {
 		setConversionStatus("validating");
 		setStatusMessage(null);
-		setXmlOutput(null);
 
 		if (!validateAllInputsBeforeConversion()) {
 			setConversionStatus("error");
@@ -302,53 +284,55 @@ ${dataRowsXml}  </DATA>
 			});
 		}, 200);
 
-		setTimeout(async () => {
+		try {
+			// Prepare request data with header fields
+			const requestData = {
+				header_fields: headerFields.map((field) => ({
+					tagName: field.tagName,
+					tagValue: field.tagValue,
+				})),
+			};
+
+			const file = excelFile!;
+			const formData = new FormData();
+			formData.append("file", file);
+			formData.append("header_fields", JSON.stringify(headerFields));
+
+			const response = await fetch("/api/v1/convert", {
+				method: "POST",
+				body: formData, // <-- This is important!
+			});
+
+			if (!response.ok) {
+				throw new Error("Failed to convert file. Please try again.");
+			}
+
+			const result = await response.json();
+
 			clearInterval(progressInterval);
 			setConversionProgress(100);
-			try {
-				const generatedXml = await generateXmlContent();
-				setXmlOutput(generatedXml);
-				setConversionStatus("completed");
-				setStatusMessage(
-					"Conversion successful! Your XML file is ready for download."
-				);
-			} catch (error) {
-				setConversionStatus("error");
-				setStatusMessage(
-					error instanceof Error
-						? error.message
-						: "An unknown error occurred during conversion."
-				);
-				toast({
-					title: "Conversion Error",
-					description:
-						error instanceof Error
-							? error.message
-							: "An unknown error occurred.",
-					variant: "destructive",
-				});
-			}
-		}, 2200);
-	};
+			setConversionStatus("completed");
+			setStatusMessage(
+				"Conversion successful! Your XML file is ready for download."
+			);
 
-	const handleDownload = () => {
-		if (!xmlOutput || !originalFileName) return;
-		const blob = new Blob([xmlOutput], { type: "application/xml" });
-		const url = URL.createObjectURL(blob);
-		const a = document.createElement("a");
-		a.href = url;
-		const baseName =
-			originalFileName.substring(0, originalFileName.lastIndexOf(".")) ||
-			originalFileName;
-		a.download = `${baseName}.xml`;
-		document.body.appendChild(a);
-		a.click();
-		document.body.removeChild(a);
-		URL.revokeObjectURL(url);
-		toast({
-			title: "Download Started",
-			description: `${baseName}.xml is downloading.`,
-		});
+			// Trigger download using the full API base URL
+			window.location.href = result.downloadUrl;
+		} catch (error) {
+			clearInterval(progressInterval);
+			setConversionStatus("error");
+			setStatusMessage(
+				error instanceof Error
+					? error.message
+					: "An unknown error occurred during conversion."
+			);
+			toast({
+				title: "Conversion Error",
+				description:
+					error instanceof Error ? error.message : "An unknown error occurred.",
+				variant: "destructive",
+			});
+		}
 	};
 
 	const getStatusAlertVariant = (): "default" | "destructive" | undefined => {
@@ -568,22 +552,14 @@ ${dataRowsXml}  </DATA>
 					)}
 				</div>
 
-				{conversionStatus === "completed" && xmlOutput && (
-					<div className="mt-6 flex flex-col sm:flex-row gap-4">
-						<Button
-							onClick={handleDownload}
-							className="w-full sm:w-auto flex-1 bg-accent hover:bg-accent/90 text-accent-foreground text-lg py-6"
-						>
-							<Download className="mr-2 h-5 w-5" /> Download XML
-						</Button>
-						<Button
-							onClick={resetConverter}
-							variant="outline"
-							className="w-full sm:w-auto flex-1 text-lg py-6 border-primary text-primary hover:bg-primary/10"
-						>
-							Convert Another File
-						</Button>
-					</div>
+				{conversionStatus === "completed" && (
+					<Button
+						onClick={resetConverter}
+						variant="outline"
+						className="w-full mt-4 text-lg py-6 border-primary text-primary hover:bg-primary/10"
+					>
+						Convert Another File
+					</Button>
 				)}
 				{conversionStatus === "error" && (
 					<Button

@@ -9,6 +9,10 @@ import logging
 import re
 import os
 
+# If you want to use rate limiting, ensure the correct library is installed and imported.
+# Otherwise, remove the decorator and related import.
+# from slowapi.util import limits  # Uncomment if slowapi is installed and available
+
 from ..models.schemas import (
     ConversionRequest,
     ConversionResponse,
@@ -121,22 +125,31 @@ async def convert_file(
         )
 
         # Parse request data
-        conversion_request = ConversionRequest()
+        header_fields = {}
         if request_data:
             try:
                 request_dict = json.loads(request_data)
-                conversion_request = ConversionRequest(**request_dict)
-            except json.JSONDecodeError:
+                # Get header fields as array of objects
+                header_array = request_dict.get('header_fields', [])
+                # Convert to dictionary format expected by converter
+                for field in header_array:
+                    if 'tagName' in field and 'tagValue' in field:
+                        # Preserve exact case of tag name as entered by user
+                        tag_name = field['tagName']
+                        # Replace spaces with underscores
+                        tag_name = tag_name.replace(' ', '_')
+                        header_fields[tag_name] = field['tagValue']
+            except json.JSONDecodeError as e:
                 audit_logger.log_conversion_event(
                     user_id="system",
                     input_file=file.filename,
                     output_file="",
                     conversion_time=0.0,
                     status="error",
-                    details={"error": "Invalid request data format"}
+                    details={"error": f"Invalid request data format: {str(e)}"}
                 )
                 raise HTTPException(status_code=400, detail="Invalid request data format")
-            except ValueError as e:
+            except Exception as e:
                 audit_logger.log_conversion_event(
                     user_id="system",
                     input_file=file.filename,
@@ -152,114 +165,105 @@ async def convert_file(
         input_path = config.UPLOAD_DIR / f"{file_id}_input{Path(file.filename).suffix}"
         output_path = config.OUTPUT_DIR / f"{file_id}_output.xml"
 
-        # Save uploaded file
+        # Save uploaded file using streaming
         try:
-            content = await file.read()
+            total_size = 0
             with open(input_path, "wb") as f:
-                f.write(content)
+                async for chunk in file.stream():
+                    total_size += len(chunk)
+                    f.write(chunk)
+                    
+                    # Check file size limit during streaming
+                    if total_size > config.MAX_UPLOAD_SIZE_MB * 1024 * 1024:
+                        f.close()
+                        input_path.unlink()
+                        raise HTTPException(
+                            status_code=413,
+                            detail=f"File size exceeds {config.MAX_UPLOAD_SIZE_MB}MB limit"
+                        )
             
             audit_logger.log_file_operation(
                 user_id="system",
                 action="save",
                 file_name=str(input_path),
-                file_size=len(content),
+                file_size=total_size,
                 file_type=Path(file.filename).suffix
             )
         except Exception as e:
-            audit_logger.log_file_operation(
-                user_id="system",
-                action="save",
-                file_name=str(input_path),
-                file_size=0,
-                file_type=Path(file.filename).suffix,
-                status="error",
-                details={"error": str(e)}
-            )
-            raise HTTPException(status_code=500, detail=f"Failed to save uploaded file: {str(e)}")
-
-        try:
-            # Convert file
-            converter.convert(
-                input_file=input_path,
-                output_file=output_path,
-                header_fields=conversion_request.header_fields,
-                sheet_name=conversion_request.sheet_name
-            )
-
-            # Generate download URL
-            download_url = f"{config.API_V1_PREFIX}/download/{file_id}"
-
-            # Log successful conversion
-            conversion_time = (datetime.now() - start_time).total_seconds()
-            audit_logger.log_conversion_event(
-                user_id="system",
-                input_file=file.filename,
-                output_file=str(output_path),
-                conversion_time=conversion_time,
-                status="success",
-                details={
-                    "input_size": file_size,
-                    "output_size": os.path.getsize(output_path) if os.path.exists(output_path) else 0,
-                    "header_fields": len(conversion_request.header_fields or {})
-                }
-            )
-
-            return ConversionResponse(
-                status="success",
-                message="File converted successfully",
-                downloadUrl=download_url
-            )
-
-        except (ValueError, FileNotFoundError) as e:
-            audit_logger.log_conversion_event(
-                user_id="system",
-                input_file=file.filename,
-                output_file=str(output_path),
-                conversion_time=(datetime.now() - start_time).total_seconds(),
-                status="error",
-                details={"error": str(e)}
-            )
-            raise HTTPException(status_code=400, detail=str(e))
-        except Exception as e:
-            audit_logger.log_conversion_event(
-                user_id="system",
-                input_file=file.filename,
-                output_file=str(output_path),
-                conversion_time=(datetime.now() - start_time).total_seconds(),
-                status="error",
-                details={"error": str(e)}
-            )
-            raise HTTPException(status_code=500, detail=f"Conversion failed: {str(e)}")
-
-        finally:
-            # Cleanup input file
             if input_path.exists():
                 input_path.unlink()
-                audit_logger.log_file_operation(
-                    user_id="system",
-                    action="delete",
-                    file_name=str(input_path),
-                    file_size=0,
-                    file_type=Path(file.filename).suffix
-                )
+            audit_logger.log_error(
+                user_id="system",
+                action="save",
+                error=e,
+                details={"file_name": str(input_path)}
+            )
+            raise
 
+        # Convert file
+        # Set encrypt_output to False or retrieve from request_dict if needed
+        encrypt_output = request_dict.get('encrypt_output', False) if 'request_dict' in locals() else False
+        converter.convert(
+            input_file=input_path,
+            output_file=output_path,
+            header_fields=header_fields,
+            sheet_name=request_dict.get('sheet_name') if 'request_dict' in locals() else None,
+            encrypt_output=encrypt_output
+        )
+
+        # Generate download URL
+        download_url = f"{config.API_V1_PREFIX}/download/{file_id}"
+
+        # Log successful conversion
+        conversion_time = (datetime.now() - start_time).total_seconds()
+        audit_logger.log_conversion_event(
+            user_id="system",
+            input_file=file.filename,
+            output_file=str(output_path),
+            conversion_time=conversion_time,
+            status="success",
+            details={
+                "input_size": file_size,
+                "output_size": os.path.getsize(output_path) if os.path.exists(output_path) else 0,
+                "header_fields": len(header_fields or {})
+            }
+        )
+
+        return ConversionResponse(
+            status="success",
+            message="File converted successfully",
+            downloadUrl=download_url
+        )
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
+    finally:
+        # Cleanup input and output files
+        for cleanup_path in [input_path, output_path]:
+            if cleanup_path.exists():
+                cleanup_path.unlink()
+                audit_logger.log_file_operation(
+                    user_id="system",
+                    action="delete",
+                    file_name=str(cleanup_path),
+                    file_size=0,
+                    file_type=cleanup_path.suffix
+                )
 
 @router.get("/download/{file_id}")
+# @limits(calls=30, period=60)  # Uncomment if using slowapi for rate limiting
 async def download_file(file_id: str):
-    """Download converted XML file."""
-    start_time = datetime.now()
     try:
-        # Check for encrypted file
+        # Check for both encrypted and unencrypted files
         encrypted_path = config.OUTPUT_DIR / f"{file_id}.xml.enc"
-        if not encrypted_path.exists():
+        unencrypted_path = config.OUTPUT_DIR / f"{file_id}.xml"
+        
+        if not encrypted_path.exists() and not unencrypted_path.exists():
             audit_logger.log_file_operation(
                 user_id="system",
                 action="download",
-                file_name=str(encrypted_path),
+                file_name=f"{file_id}.xml",
                 file_size=0,
                 file_type=".xml",
                 status="error",
@@ -267,20 +271,24 @@ async def download_file(file_id: str):
             )
             raise HTTPException(status_code=404, detail="File not found")
 
-        # Create temporary file for decrypted content
+        # Create temporary file for decrypted content if needed
         temp_path = config.OUTPUT_DIR / f"temp_{file_id}.xml"
         
-        # Log download attempt
-        audit_logger.log_file_operation(
-            user_id="system",
-            action="download",
-            file_name=str(encrypted_path),
-            file_size=os.path.getsize(encrypted_path),
-            file_type=".xml"
-        )
-        
-        # Decrypt file
-        encryption.decrypt_file(encrypted_path, temp_path)
+        # Use unencrypted file if it exists, otherwise decrypt the encrypted file
+        if unencrypted_path.exists():
+            temp_path = unencrypted_path
+        else:
+            # Log download attempt
+            audit_logger.log_file_operation(
+                user_id="system",
+                action="download",
+                file_name=str(encrypted_path),
+                file_size=os.path.getsize(encrypted_path),
+                file_type=".xml"
+            )
+            
+            # Decrypt file
+            encryption.decrypt_file(encrypted_path, temp_path)
 
         # Log download
         audit_logger.log_file_operation(
@@ -296,7 +304,7 @@ async def download_file(file_id: str):
             temp_path,
             media_type="application/xml",
             filename=f"converted_{file_id}.xml",
-            background=temp_path.unlink
+            background=temp_path.unlink if temp_path != unencrypted_path else None
         )
 
     except Exception as e:
