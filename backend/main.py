@@ -140,8 +140,8 @@ async def convert_excel_to_xml(
     header_fields: str = Form(None)
 ):
     try:
-        log.info(f"File upload attempt: {file.filename}")  # <-- Keep this log
-        log.info(f"Raw header_fields received: {header_fields}")  # <-- Add this log
+        log.info(f"File upload attempt: {file.filename}")
+        log.info(f"Raw header_fields received: {header_fields}")
 
         header_fields_dict = {}
         if header_fields:
@@ -154,15 +154,11 @@ async def convert_excel_to_xml(
             }
         log.info(f"Parsed header_fields_dict: {header_fields_dict}")
 
-        # Save uploaded file temporarily
-        temp_path = os.path.join(Config.UPLOAD_DIR, file.filename)
-        with open(temp_path, "wb") as f:
-            f.write(await file.read())
-        log.info(f"File upload successful: {file.filename} saved to {temp_path}")
+        # Read the uploaded file directly into memory
+        file_content = await file.read()
 
-        # Read Excel file
-        log.info(f"Starting conversion for file: {file.filename}")
-        df = pd.read_excel(temp_path)
+        # Process the file content (e.g., read it into a DataFrame)
+        df = pd.read_excel(file_content)
         sanitized_columns = [sanitize_tag(col) for col in df.columns]
         log.info(f"Sanitized XML tags: {sanitized_columns}")
 
@@ -185,7 +181,6 @@ async def convert_excel_to_xml(
         rough_string = ET.tostring(root, encoding="utf-8", method="xml")
         reparsed = minidom.parseString(rough_string)
         xml_content = reparsed.toprettyxml(indent="  ", encoding="utf-8")
-        # Remove possible blank lines at the start
         if xml_content.startswith(b'\n'):
             xml_content = xml_content.lstrip(b'\n')
 
@@ -199,7 +194,6 @@ async def convert_excel_to_xml(
             f.write(xml_content)
         log.info(f"File conversion successful: {file.filename} -> {saved_filename}")
 
-        backend_url = os.getenv("BACKEND_URL", "http://localhost:8000")
         download_url = f"/api/v1/download/{saved_filename}"
         log.info(f"Download URL generated: {download_url}")
         return {

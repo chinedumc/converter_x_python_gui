@@ -10,15 +10,13 @@ load_dotenv()
 class Config:
     # Base paths
     BASE_DIR = Path(__file__).resolve().parent
-    UPLOAD_DIR = BASE_DIR / "uploads"
+    # Remove UPLOAD_DIR
     OUTPUT_DIR = Path(os.getenv("OUTPUT_DIR", os.path.expanduser("~/converter_x_output")))
-    # This will default to a folder in the user's home directory if not set
-
     LOG_DIR = BASE_DIR / "logs"
     LOG_FILE_PATH = str(LOG_DIR / "audit.log")
 
     # Create necessary directories
-    for directory in [UPLOAD_DIR, OUTPUT_DIR, LOG_DIR]:
+    for directory in [OUTPUT_DIR, LOG_DIR]:
         directory.mkdir(parents=True, exist_ok=True)
 
     # API Settings
