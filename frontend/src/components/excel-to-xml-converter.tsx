@@ -425,7 +425,6 @@ export function ExcelToXmlConverter() {
 							</div>
 						</div>
 						<Button
-							variant="outline"
 							onClick={handleAddNewHeaderField}
 							className="mt-3 border-primary text-primary hover:bg-primary/10 hover:text-primary w-full md:w-auto"
 						>
@@ -453,8 +452,6 @@ export function ExcelToXmlConverter() {
 											)}</${escapeXml(field.tagName)}>`}
 										</code>
 										<Button
-											variant="ghost"
-											size="icon"
 											onClick={() => handleRemoveHeaderField(field.id)}
 											className="text-destructive hover:bg-destructive/10 shrink-0"
 											aria-label={`Remove header field ${field.tagName}`}
@@ -555,7 +552,6 @@ export function ExcelToXmlConverter() {
 				{conversionStatus === "completed" && (
 					<Button
 						onClick={resetConverter}
-						variant="outline"
 						className="w-full mt-4 text-lg py-6 border-primary text-primary hover:bg-primary/10"
 					>
 						Convert Another File
@@ -564,7 +560,6 @@ export function ExcelToXmlConverter() {
 				{conversionStatus === "error" && (
 					<Button
 						onClick={resetConverter}
-						variant="outline"
 						className="w-full mt-4 text-lg py-6 border-primary text-primary hover:bg-primary/10"
 					>
 						Try Again
