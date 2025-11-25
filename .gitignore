@@ -55,3 +55,8 @@ coverage/
 # Misc
 *.pem
 .vercel
+
+# Backend uploads and output
+backend/uploads/
+backend/logs/
+backend/output/

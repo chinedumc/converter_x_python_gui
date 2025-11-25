@@ -68,12 +68,11 @@ This pair will produce:
 
 ## Backend Implementation
 
-- **Language**: Python
+- **Language**: Node.js with Express
 - **Architecture**:
-  - Microservices
   - RESTful API
-  - Service layer + Repository pattern
-  - Event-driven architecture for conversion tasks
+  - Service layer pattern
+  - Modular route handlers
 
 ---
 
@@ -96,7 +95,7 @@ This pair will produce:
 
 ## 📊 Logging & Auditing
 
-- **Logger**: Python's built-in logging module
+- **Logger**: Winston (Node.js logging library)
 - Tracks:
   - Exceptions and errors
   - User actions
@@ -130,13 +129,14 @@ This pair will produce:
      - `SaveLocationSelector`
 
 2. **Backend**
-   - Set up Python backend using FastAPI or Flask
+   - Set up Node.js/Express backend
    - Create API endpoints:
-     - `POST /convert`
-     - `GET /download/:id`
-   - Integrate AES-256 encryption utility
+     - `POST /api/v1/convert`
+     - `POST /api/v1/validate`
+     - `GET /api/v1/download/:id`
+     - `GET /api/v1/health`
    - Add session timeout management
-   - Setup structured logging with Serilog
+   - Setup structured logging with Winston
 
 ---
 
