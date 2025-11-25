@@ -60,3 +60,6 @@ coverage/
 backend/uploads/
 backend/logs/
 backend/output/
+
+# TypeScript build info
+*.tsbuildinfo
