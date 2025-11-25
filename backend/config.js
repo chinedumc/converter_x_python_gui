@@ -2,6 +2,16 @@ const path = require('path');
 const fs = require('fs');
 require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
 
+// Validate required environment variables
+if (!process.env.SECRET_KEY) {
+    console.error('ERROR: SECRET_KEY environment variable is required');
+    process.exit(1);
+}
+if (!process.env.ENCRYPTION_KEY) {
+    console.error('ERROR: ENCRYPTION_KEY environment variable is required');
+    process.exit(1);
+}
+
 // Base directory
 const BASE_DIR = __dirname;
 
@@ -35,9 +45,9 @@ const config = {
     UPLOAD_DIR,
     LOG_FILE_PATH: path.join(LOG_DIR, 'audit.log'),
 
-    // Security
-    SECRET_KEY: process.env.SECRET_KEY || 'default-secret-key',
-    ENCRYPTION_KEY: process.env.ENCRYPTION_KEY || 'default-encryption-key',
+    // Security - require these environment variables
+    SECRET_KEY: process.env.SECRET_KEY,
+    ENCRYPTION_KEY: process.env.ENCRYPTION_KEY,
 
     // Session
     SESSION_TIMEOUT_MINUTES: parseInt(process.env.SESSION_TIMEOUT_MINUTES || '5', 10),

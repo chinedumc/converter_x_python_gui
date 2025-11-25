@@ -143,6 +143,9 @@ router.post('/convert', upload.single('file'), async (req, res) => {
         );
 
         // Parse header fields from request
+        // Supports two formats:
+        // 1. 'header_fields': Direct array of {tagName, tagValue} objects (from excel-to-xml-converter.tsx)
+        // 2. 'request_data': JSON with header_fields inside (from lib/api.ts)
         let headerFields = {};
         const headerFieldsRaw = req.body.header_fields || req.body.request_data;
         
